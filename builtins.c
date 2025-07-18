@@ -1,281 +1,445 @@
 /**
  * @file builtins.c
- * @author Tavish Naruka (tavishnaruka@gmail.com)
- * @brief This file contains the definitions of the built-in words used by this
- * forth.
- * 
- * @copyright Copyright (c) 2024
- * 
+ *
+ * @brief This file contains the definitions of the built-in words
+ * used by this forth.
  */
-#include "builtins.h"
-#include "helper.h"
 #include <string.h>
 #include <stdio.h>
+#include "vm.h"
+#include "builtins.h"
+#include "builtins_common.h"
 
-/* #define DBG()	printf("%s\n", __func__) */
-#define DBG()
+#define ARRAY_SIZE(x)		(sizeof(x)/sizeof(x[0]))
 
-void dict_append(struct forth_ctx *ctx, void *word)
-{
-	DBG();
-	memcpy(APPEND_PTR, word, sizeof(word_t));
-	HERE += sizeof(word_t);
-}
+/* forward declarations of utility functions */
+int stack_push_wordname(struct forth_ctx *ctx, char *s, int len);
 
-static inline void _next(struct forth_ctx *ctx)
-{
-	if (ctx->rsp > 0) {
-		ctx->next = ctx->ip + 4;
-	} else {
-		ctx->next = DICT_NULL;
-	}
-}
-#define NEXT()	_next(ctx)
+/* forward declarations of primitive word functions also used by other words */
+void do_word(struct forth_ctx *ctx);
 
-/**
- * @brief pushes first the string (rounds up to 4 bytes), then the length 
- * (leaves length on top)
- * 
- * @return length of name
- */
-int vm_stack_push_wordname(struct forth_ctx *ctx, char *s, int len);
-
-/**************************** builtin words follow ****************************/
+/**************************** primitive words functions follow ****************************/
 
 /**
  * @brief creates new dictionaly item
- * 
- * STACK_POP() -> length of the word to be created
- * STACK_SUB(ROUND_UP_4(len/4)) -> the word to be created
+ *
+ * stack_pop(ctx) -> length of the word to be created
+ * STACK_SUB(ALIGN_UP_WORD_T(len/4)) -> the word to be created
  */
-void _do_create_word(struct forth_ctx *ctx)
-{
-	DBG();
-	link_t old_latest = LATEST;
-	
-	/**
-	 * 'latest' will now point to new dictionary item (at/after 'here')
-	 * 
-	 * (align, just in case)
-	 */
-	LATEST = ((HERE + sizeof(link_t) -1) / sizeof(link_t)) * sizeof(link_t);
-	HERE = LATEST + sizeof(dict_header_t);
-
-	/* this is what 'latest' is pointing to now, the new dictionary item */
-	dict_header_t *new = 
-		(dict_header_t *) &ctx->dict.mem[LATEST];
-	new->link = old_latest;
-
-	new->flags.hidden = 0;
-	new->flags.immediate = 0;
-	new->flags.length = STACK_POP();
-
-	STACK_SUB(ROUND_UP_4(new->flags.length)/4);
-	memset((char *)APPEND_PTR, 0, ROUND_UP_4(new->flags.length));
-	memcpy((char *)APPEND_PTR, (char *)STACK_TOP_ADDR(), 
-		new->flags.length);
-
-	/**
-	 * Now that word is appended after dictionary header, move 'here' too,
-	 * and round up to 4 byte for alignment.
-	 */
-	HERE += new->flags.length;
-	HERE = ROUND_UP_4(HERE);
-}
-
 void do_create_word(struct forth_ctx *ctx)
 {
-	DBG();
-	_do_create_word(ctx);
-	NEXT();
+	dict_header_t *old_latest;
+	dict_header_t *new;
+
+	old_latest = ctx->dict.latest;
+	ctx->dict.latest = (dict_header_t *) ALIGN_UP_WORD_T(ctx->dict.latest);
+	new = (dict_header_t *)ctx->dict.here;
+	ctx->dict.here = (unsigned char *)(new + 1);
+
+	new->link = old_latest;
+	new->flags.f.hidden = 0;
+	new->flags.f.immediate = 0;
+	new->flags.f.length = stack_pop(ctx);
+
+	stack_sub(ctx, ALIGN_UP_WORD_T(new->flags.f.length)/(sizeof(word_t)));
+	memset(ctx->dict.here, 0, ALIGN_UP_WORD_T(new->flags.f.length));
+	memcpy(ctx->dict.here, &ctx->stack[ctx->sp], new->flags.f.length);
+
+	/**
+	 * add length to 'here' round up to word_t size for alignment.
+	 */
+	ctx->dict.here += new->flags.f.length;
+	ctx->dict.here = (unsigned char *) ALIGN_UP_WORD_T((stack_cell_t)ctx->dict.here);
+	ctx->dict.latest = new;
+}
+
+void do_find(struct forth_ctx *ctx)
+{
+	void do_find(struct forth_ctx *ctx);
+	do_word(ctx);
+	stack_cell_t len = stack_pop(ctx);
+	stack_sub(ctx, ALIGN_UP_WORD_T(len)/(sizeof(word_t)));
+	stack_push(ctx, (stack_cell_t)find_word_header(ctx, (char *)&ctx->stack[ctx->sp], len));
 }
 
 /**
  * @brief creates new dictionaly item
- * 
- * STACK_POP() -> the codeword to be appended
- * HERE += 4 after appending to current word definition
+ *
+ * stack_pop(ctx) -> the codeword to be appended
+ * ctx->dict.here += 4 after appending to current word definition
  */
 void do_comma(struct forth_ctx *ctx)
 {
-	DBG();
-	u32 codeword = STACK_POP();
-	dict_append(ctx, &codeword);
-	NEXT();
-}
-
-/**
- * @brief duplicates the item on top of stack
- * 
- * @param ctx 
- */
-void do_dup(struct forth_ctx *ctx)
-{
-	DBG();
-	stack_cell_t top = *(STACK_TOP_ADDR()-1);
-	STACK_PUSH(top);
-	NEXT();
+	stack_cell_t codeword = stack_pop(ctx);
+	compile_word(ctx, codeword);
 }
 
 void do_printstack(struct forth_ctx *ctx)
 {
-	DBG();
-	TELL("STACK > ");
-	u32 p = ctx->sp;
-	char str[12];
-	while (p > 0) {
-		snprintf(str, sizeof(str), "%u ", ctx->stack[p-1]);
-		str[sizeof(str)-1] = 0;
-		TELL(str);
+	ctx->plat.puts("STACK > ");
+	stack_cell_t p = ctx->sp;
+	char str[32];
+	while (p > 0 && p <= STACK_SIZE_MAX) {
+		if (p-1 < STACK_SIZE_MAX) {
+			snprintf(str, sizeof(str), "%lu ", ctx->stack[p - 1]);
+		} else {
+			snprintf(str, sizeof(str), "??? ");
+		}
+		str[sizeof(str) - 1] = 0;
+		ctx->plat.puts(str);
 		p--;
 	}
-	TELL("\n");
-	NEXT();
+	ctx->plat.puts("\n");
 }
 
 void do_dot(struct forth_ctx *ctx)
 {
-	DBG();
 	char str[30];
 	if (ctx->sp > 0) {
-		snprintf(str, sizeof(str), "%u\n", STACK_POP());
-		str[sizeof(str)-1] = 0;
-		TELL(str);
+		snprintf(str, sizeof(str), "%lu\n", stack_pop(ctx));
+		str[sizeof(str) - 1] = 0;
+		ctx->plat.puts(str);
 	} else {
 		snprintf(str, sizeof(str), "Data stack underflow\n");
-		str[sizeof(str)-1] = 0;
-		TELL(str);
+		str[sizeof(str) - 1] = 0;
+		ctx->plat.puts(str);
 	}
-	NEXT();
 }
 
 /**
- * @brief pops top two items on stack and pushes result of their addition.
- * 
- * @param ctx 
+ * @brief removes top item from stack
+ *
+ * @param ctx
  */
+void do_drop(struct forth_ctx *ctx)
+{
+	if (ctx->sp > 0) {
+		(void)stack_pop(ctx);
+	}
+}
+
+/**
+ * @brief swaps top two items on stack
+ *
+ * @param ctx
+ */
+void do_swap(struct forth_ctx *ctx)
+{
+	if (ctx->sp >= 2) {
+		stack_cell_t n1 = stack_pop(ctx);
+		stack_cell_t n2 = stack_pop(ctx);
+		stack_push(ctx, n1);
+		stack_push(ctx, n2);
+	}
+}
+
+/**
+ * @brief rotates top three items on stack
+ *
+ * @param ctx
+ */
+void do_rot(struct forth_ctx *ctx)
+{
+	if (ctx->sp >= 3) {
+		stack_cell_t n1 = stack_pop(ctx);
+		stack_cell_t n2 = stack_pop(ctx);
+		stack_cell_t n3 = stack_pop(ctx);
+		stack_push(ctx, n2);
+		stack_push(ctx, n1);
+		stack_push(ctx, n3);
+	}
+}
+
+/**
+ * @brief copies second item to top of stack
+ *
+ * @param ctx
+ */
+void do_over(struct forth_ctx *ctx)
+{
+	if (ctx->sp >= 2) {
+		stack_cell_t n1 = stack_pop(ctx);
+		stack_cell_t n2 = stack_pop(ctx);
+		stack_push(ctx, n2);
+		stack_push(ctx, n1);
+		stack_push(ctx, n2);
+	}
+}
+
 void do_plus(struct forth_ctx *ctx)
 {
-	DBG();
-	stack_cell_t n1 = STACK_POP();
-	stack_cell_t n2 = STACK_POP();
-	STACK_PUSH(n1 + n2);
-	NEXT();
+	stack_cell_t n1 = stack_pop(ctx);
+	stack_cell_t n2 = stack_pop(ctx);
+	stack_push(ctx, n1 + n2);
 }
 
 void do_multiply(struct forth_ctx *ctx)
 {
-	DBG();
-	stack_cell_t n1 = STACK_POP();
-	stack_cell_t n2 = STACK_POP();
-	STACK_PUSH(n1 * n2);
-	NEXT();
+	stack_cell_t n1 = stack_pop(ctx);
+	stack_cell_t n2 = stack_pop(ctx);
+	stack_push(ctx, n1 * n2);
 }
 
-void do_exit(struct forth_ctx *ctx)
+void do_minus(struct forth_ctx *ctx)
 {
-	DBG();
-	if (ctx->rsp > 0) {
-		ctx->ip = RSTACK_POP();
-		NEXT();
+	stack_cell_t n1 = stack_pop(ctx);
+	stack_cell_t n2 = stack_pop(ctx);
+	stack_push(ctx, n2 - n1);
+}
+
+void do_divide(struct forth_ctx *ctx)
+{
+	stack_cell_t n1 = stack_pop(ctx);
+	stack_cell_t n2 = stack_pop(ctx);
+	if (n1 != 0) {
+		stack_push(ctx, n2 / n1);
 	} else {
-		ctx->ip = DICT_NULL;
-		ctx->next = DICT_NULL;
+		ctx->plat.puts("Division by zero error\n");
+		stack_push(ctx, 0);
 	}
-}
-
-void do_docol(struct forth_ctx *ctx)
-{
-	DBG();
-	RSTACK_PUSH(ctx->ip);
-	ctx->ip = ctx->next;
-	NEXT();
-}
-
-u32 _do_find(struct forth_ctx *ctx, u32 len, char *to_find)
-{
-	DBG();
-	char *dst_name;
-	dict_header_t *p = CURRENT_WORD;
-	
-	while (DICT_PTR(p) != DICT_NULL) {
-		dst_name = (char *)((u8 *)p + sizeof(dict_header_t));
-		if ((p->flags.length == len) &&
-		    (memcmp(dst_name, to_find, len) == 0) &&
-		     p->flags.hidden != 1) {
-			/* found an exact match */
-			return DICT_PTR(p);
-		}
-		p = LINK_PTR(p->link);
-	}
-
-	return DICT_NULL;
 }
 
 /**
- * @brief find word in dictionary
- * STACK_POP() -> length of string
- * STACK_SUB(ROUND_UP_4(len/4))
- * ----
- * STACK_PUSH(address)
- * 
- * @param ctx 
+ * @brief pops top two items on stack and pushes result of their modulo.
+ *
+ * @param ctx
  */
-void do_find(struct forth_ctx *ctx)
+void do_mod(struct forth_ctx *ctx)
 {
-	DBG();
-	u32 len = STACK_POP();
-	STACK_SUB(ROUND_UP_4(len)/4);
-	char *to_find = (char *) STACK_TOP_ADDR();
-
-	STACK_PUSH(_do_find(ctx, len, to_find));
-	NEXT();
+	stack_cell_t n1 = stack_pop(ctx);
+	stack_cell_t n2 = stack_pop(ctx);
+	if (n1 != 0) {
+		stack_push(ctx, n2 % n1);
+	} else {
+		ctx->plat.puts("Division by zero error\n");
+		stack_push(ctx, 0);
+	}
 }
 
-u32 _do_2cfa(struct forth_ctx *ctx, u32 word_ptr)
+/**
+ * @brief increments top stack item by 1.
+ *
+ * @param ctx
+ */
+void do_incr(struct forth_ctx *ctx)
 {
-	DBG();
-	dict_header_t *p = LINK_PTR(word_ptr);
-	word_ptr += ROUND_UP_4(p->flags.length + sizeof(dict_header_t));
-	return word_ptr;
+	if (ctx->sp > 0) {
+		/* sp is next available slot */
+		ctx->stack[ctx->sp - 1]++;
+	}
+}
+
+/**
+ * @brief decrements top stack item by 1.
+ *
+ * @param ctx
+ */
+void do_decr(struct forth_ctx *ctx)
+{
+	if (ctx->sp > 0) {
+		/* sp is next available slot */
+		ctx->stack[ctx->sp - 1]--;
+	}
+}
+
+/**
+ * @brief compares top two items on stack for equality.
+ *
+ * @param ctx
+ */
+void do_equal(struct forth_ctx *ctx)
+{
+	if (ctx->sp >= 2) {
+		stack_cell_t n1 = stack_pop(ctx);
+		stack_cell_t n2 = stack_pop(ctx);
+		stack_push(ctx, n1 == n2 ? 1 : 0);
+	} else {
+		stack_push(ctx, 0);
+	}
+}
+
+/**
+ * @brief compares top two items on stack (n1 n2 -- flag), flag is true if n1 < n2.
+ *
+ * @param ctx
+ */
+void do_less_than(struct forth_ctx *ctx)
+{
+	if (ctx->sp >= 2) {
+		stack_cell_t n1 = stack_pop(ctx);
+		stack_cell_t n2 = stack_pop(ctx);
+		stack_push(ctx, n2 < n1 ? 1 : 0);
+	} else {
+		stack_push(ctx, 0);
+	}
+}
+
+/**
+ * @brief compares top two items on stack (n1 n2 -- flag), flag is true if n1 > n2.
+ *
+ * @param ctx
+ */
+void do_greater_than(struct forth_ctx *ctx)
+{
+	if (ctx->sp >= 2) {
+		stack_cell_t n1 = stack_pop(ctx);
+		stack_cell_t n2 = stack_pop(ctx);
+		stack_push(ctx, n2 > n1 ? 1 : 0);
+	} else {
+		stack_push(ctx, 0);
+	}
+}
+
+/**
+ * @brief tests if top stack item equals zero.
+ *
+ * @param ctx
+ */
+void do_zero_equal(struct forth_ctx *ctx)
+{
+	if (ctx->sp >= 1) {
+		stack_cell_t n = stack_pop(ctx);
+		stack_push(ctx, n == 0 ? 1 : 0);
+	} else {
+		stack_push(ctx, 0);
+	}
+}
+
+/**
+ * @brief fetches a 32-bit value from memory at given address.
+ *
+ * @param ctx
+ */
+void do_fetch(struct forth_ctx *ctx)
+{
+	if (ctx->sp > 0) {
+		stack_cell_t addr = stack_pop(ctx);
+		/* Check if address is within dictionary bounds and warn if not */
+		if ((void *)addr >= (void *)ctx->dict.mem &&
+		    (void *)addr < (void *)(ctx->dict.mem + DICTIONARY_MEMORY_SIZE)) {
+			/* Address is within dictionary */
+		} else {
+			ctx->plat.puts(__func__);
+			ctx->plat.puts(": warning - accessing outside dictionary bounds\n");
+		}
+		/* Use raw address directly */
+		stack_cell_t value = *(stack_cell_t *)addr;
+		stack_push(ctx, value);
+	} else {
+		stack_push(ctx, 0);
+	}
+}
+
+/**
+ * @brief stores a 32-bit value to memory at given address.
+ *
+ * @param ctx
+ */
+void do_store(struct forth_ctx *ctx)
+{
+	if (ctx->sp >= 2) {
+		stack_cell_t addr = stack_pop(ctx);
+		stack_cell_t value = stack_pop(ctx);
+		/* Check if address is within dictionary bounds and warn if not */
+		if ((void *)addr >= (void *)ctx->dict.mem &&
+		    (void *)addr < (void *)(ctx->dict.mem + DICTIONARY_MEMORY_SIZE)) {
+			/* Address is within dictionary */
+		} else {
+			ctx->plat.puts(__func__);
+			ctx->plat.puts(": warning - accessing outside dictionary bounds\n");
+		}
+		/* Use raw address directly */
+		*(stack_cell_t *)addr = value;
+	}
+}
+
+/**
+ * @brief fetches a single byte from memory at given address.
+ *
+ * @param ctx
+ */
+void do_cfetch(struct forth_ctx *ctx)
+{
+	if (ctx->sp > 0) {
+		stack_cell_t addr = stack_pop(ctx);
+		/* Check if address is within dictionary bounds and warn if not */
+		if ((void *)addr >= (void *)ctx->dict.mem &&
+		    (void *)addr < (void *)(ctx->dict.mem + DICTIONARY_MEMORY_SIZE)) {
+			/* Address is within dictionary */
+		} else {
+			ctx->plat.puts(__func__);
+			ctx->plat.puts(": warning - accessing outside dictionary bounds\n");
+		}
+		/* Use raw address directly */
+		unsigned char value = *(unsigned char *)addr;
+		stack_push(ctx, value);
+	} else {
+		ctx->plat.puts(__func__);
+	 	ctx->plat.puts(" stack underflow\n");
+	}
+}
+
+/**
+ * @brief stores a single byte to memory at given address.
+ *
+ * @param ctx
+ */
+void do_cstore(struct forth_ctx *ctx)
+{
+	if (ctx->sp >= 2) {
+		stack_cell_t addr = stack_pop(ctx);
+		stack_cell_t value = stack_pop(ctx);
+		/* Check if address is within dictionary bounds and warn if not */
+		if ((void *)addr >= (void *)ctx->dict.mem &&
+		    (void *)addr < (void *)(ctx->dict.mem + DICTIONARY_MEMORY_SIZE)) {
+			/* Address is within dictionary */
+		} else {
+			ctx->plat.puts(__func__);
+			ctx->plat.puts(": warning - accessing outside dictionary bounds\n");
+		}
+		/* Use raw address directly */
+		*(unsigned char *)addr = (unsigned char)(value & 0xFF);
+	}
 }
 
 /**
  * @brief convert pointer to word in dictionary to the code field address.
- * STACK_POP() -> dictionary word pointer
+ * stack_pop(ctx) -> dictionary word pointer
  * ----
- * STACK_PUSH(address)
- * 
- * @param ctx 
+ * stack_push(ctx, address)
+ *
+ * @param ctx
  */
 void do_2cfa(struct forth_ctx *ctx)
 {
-	DBG();
-	u32 word_ptr = STACK_POP();
-	STACK_PUSH(_do_2cfa(ctx, word_ptr););
-	NEXT();
+	dict_header_t *w_h = (dict_header_t *)stack_pop(ctx);
+	stack_push(ctx, (stack_cell_t)(w_h + 1));
 }
 
 void do_lbrac(struct forth_ctx *ctx)
 {
-	DBG();
-	ctx->mode = MODE_IMMEDIATE;
-	NEXT();
+	ctx->intrp_data.mode = MODE_IMMEDIATE;
 }
 
 void do_rbrac(struct forth_ctx *ctx)
 {
-	DBG();
-	ctx->mode = MODE_COMPILE;
-	NEXT();
+	ctx->intrp_data.mode = MODE_COMPILE;
 }
 
-/* puts value of LATEST on the stack */
+/* puts value of ctx->dict.latest on the stack */
 void do_latest_fetch(struct forth_ctx *ctx)
 {
-	DBG();
-	STACK_PUSH(LATEST);
-	NEXT();
+	stack_push(ctx, (stack_cell_t)ctx->dict.latest);
+}
+
+/**
+ * @brief pushes current ctx->dict.here pointer to stack
+ *
+ * @param ctx
+ */
+void do_here(struct forth_ctx *ctx)
+{
+	stack_push(ctx, (stack_cell_t)ctx->dict.here);
 }
 
 /**
@@ -283,21 +447,37 @@ void do_latest_fetch(struct forth_ctx *ctx)
  */
 void do_hidden(struct forth_ctx *ctx)
 {
-	DBG();
-	dict_header_t *word_ptr = LINK_PTR(STACK_POP());
-	word_ptr->flags.hidden ^= 1;
-	NEXT();
+	dict_header_t *w_h = (dict_header_t *)stack_pop(ctx);
+	w_h -= 1;
+	w_h->flags.f.hidden ^= 1;
 }
 
-void _do_word(struct forth_ctx *ctx)
+int stack_push_wordname(struct forth_ctx *ctx, char *s, int len)
 {
-	DBG();
+	/* maximum 32 len */
+	len = len % (WORD_NAME_MAX_LEN - 1);
+	/* round up to 4 byte boundary */
+	stack_cell_t r_len = ALIGN_UP_WORD_T(len);
+
+	/* clear the to-be-written-to area */
+	memset(&ctx->stack[ctx->sp], 0, r_len);
+
+	/* copy to stack and adjust stack */
+	memcpy(&ctx->stack[ctx->sp], s, len);
+	stack_add(ctx, r_len/sizeof(stack_cell_t));
+	stack_push(ctx, len);
+
+	return len;
+}
+
+void do_word(struct forth_ctx *ctx)
+{
 	char token[MAX_INPUT_LEN + 1];
 	char input_byte;
-	u32 input_len = 0;
+	stack_cell_t input_len = 0;
 
 	do {
-		input_byte = ctx->plat.get_key();
+		input_byte = ctx->plat.getchar();
 
 		if (input_len > (MAX_INPUT_LEN - 1)) {
 			input_len = 0;
@@ -305,8 +485,8 @@ void _do_word(struct forth_ctx *ctx)
 
 		if ((input_byte == ' ') || (input_byte == '\t')  || (input_byte == '\n') || (input_byte == '\r')) {
 			if (input_len > 0) {
-				memcpy(STACK_TOP_ADDR(), token, input_len);
-				vm_stack_push_wordname(ctx, token, input_len);
+				memcpy(&ctx->stack[ctx->sp], token, input_len);
+				stack_push_wordname(ctx, token, input_len);
 				break;
 			}
 		}
@@ -315,153 +495,116 @@ void _do_word(struct forth_ctx *ctx)
 	} while(1);
 }
 
-/* this pushes a word and then the length of word on to the stack */
-void do_word(struct forth_ctx *ctx)
-{
-	DBG();
-	_do_word(ctx);
-	NEXT();
-}
-
-void do_lit(struct forth_ctx *ctx)
-{
-	DBG();
-	ctx->ip += 4;
-	STACK_PUSH(ctx->dict.mem[ctx->ip]);
-	NEXT();
-}
-
 void do_key(struct forth_ctx *ctx)
 {
-	DBG();
-	STACK_PUSH(ctx->plat.get_key());
-	NEXT();
+	ctx->stack[ctx->sp++] = (ctx->plat.getchar());
+}
+
+void do_colon(struct forth_ctx *ctx)
+{
+	/* Read next word and create dictionary entry */
+	do_word(ctx);
+	do_create_word(ctx);
+
+	/* Hide the word until definition is complete */
+	ctx->dict.latest->flags.f.hidden = 1;
+
+	/* Compile DOCOL as the codeword for this definition */
+	word_t w = do_docol;
+	compile_word(ctx, (stack_cell_t)w);
+
+	/* Switch to compile mode */
+	ctx->intrp_data.mode = MODE_COMPILE;
+}
+
+void do_semicolon(struct forth_ctx *ctx)
+{
+	word_t w;
+
+	/* Compile EXIT to end definition */
+	w = do_exit;
+	compile_word(ctx, (stack_cell_t)w);
+
+	/* Unhide the word */
+	ctx->dict.latest->flags.f.hidden = 0;
+
+	/* Switch back to immediate mode */
+	ctx->intrp_data.mode = MODE_IMMEDIATE;
 }
 
 /**
- * This contains the built in words defined as C functions (not forth)
- * NOTE: update builtin_idx_e when you change this and vice versa
+ * This contains the primitive words defined in this forth.
  */
 
-struct bultin_entry builtin_init_c_table[] = {
-	/** 
-	 * NOTE: EXIT is a special one, we need this defiend first, and then
-	 * we append it to each builtin c function definition
-	 */
-	[EXIT_IDX]		= {.word = "EXIT",	.c_func = do_exit,		.flags = {}},
-	[CREATE_IDX]		= {.word = "CREATE",	.c_func = do_create_word,	.flags = {}},
-	[COMMA_IDX]		= {.word = ",",		.c_func = do_comma,		.flags = {}},
-	[DOCOL_IDX]		= {.word = "DOCOL",	.c_func = do_docol,		.flags = {}},
-	[DUP_IDX]		= {.word = "DUP",	.c_func = do_dup,		.flags = {}},
-	[PLUS_IDX]		= {.word = "+",		.c_func = do_plus,		.flags = {}},
-	[MULTIPLY_IDX]		= {.word = "*",		.c_func = do_multiply,		.flags = {}},
-	[FIND_IDX]		= {.word = "FIND",	.c_func = do_find,		.flags = {}},
-	[TO_CFA_IDX]		= {.word = ">CFA",	.c_func = do_2cfa,		.flags = {}},
-	[PRINT_STACK_IDX]	= {.word = ".s",	.c_func = do_printstack,	.flags = {}},
-	[DOT_IDX]		= {.word = ".",		.c_func = do_dot,		.flags = {}},
-	[RBRAC_IDX]		= {.word = "]",		.c_func = do_rbrac,		.flags = {}},
-	[LBRAC_IDX]		= {.word = "[",		.c_func = do_lbrac,		.flags = {}},
-	[LATEST_FETCH_IDX]	= {.word = "LATEST_F",	.c_func = do_latest_fetch,	.flags = {}},
-	[HIDDEN_IDX]		= {.word = "HIDDEN",	.c_func = do_hidden,		.flags = {}},
-	[WORD_IDX]		= {.word = "WORD",	.c_func = do_word,		.flags = {}},
-	[LIT_IDX]		= {.word = "LIT",	.c_func = do_lit,		.flags = {}},
-	[KEY_IDX]		= {.word = "KEY",	.c_func = do_key,		.flags = {}},
-};
-
-
-#define FORTH_LV2_WORD_MAX_LEN	(20)
-/* these words are composed of builtins */
-struct builtin_entry_lv2 {
-	char *word;	/* word, up to WORD_NAME_MAX_LEN is used  */
+struct bultin_entry {
+	char word[WORD_NAME_MAX_LEN];
+	word_t c_func;
 	flag_t flags;
-	enum builtin_idx_e c_idx_list[FORTH_LV2_WORD_MAX_LEN];
 };
 
-/* note: the problem here is that we need the correct value of the codewords
-after LIT_IDX, which we cannot do statically */
-struct builtin_entry_lv2 builtins_lvl2_table[] = {
-	{
-		.word = "DOUBLE",
-		.flags = {},
-		.c_idx_list = {DOCOL_IDX, DUP_IDX, PLUS_IDX, EXIT_IDX, NULL_IDX},
-	},
-	{
-		/**
-		 * We don't necessarily need to define ":" in forth, it would be
-		 * easier to define as a c function, but at this stage we can do
-		 * it with few simple forth words already defined.
-		 */
-		.word = ":",
-		.flags = {},
-		.c_idx_list = {DOCOL_IDX, WORD_IDX, CREATE_IDX, LIT_IDX, DOCOL_IDX,
-			       COMMA_IDX, LATEST_FETCH_IDX, HIDDEN_IDX, RBRAC_IDX,
-			       EXIT_IDX, NULL_IDX},
-	},
-	{
-		.word = ";",
-		.flags = {.immediate = 1},
-		.c_idx_list = {DOCOL_IDX, LIT_IDX, EXIT_IDX, COMMA_IDX, LATEST_FETCH_IDX,
-			       HIDDEN_IDX, LBRAC_IDX, EXIT_IDX, NULL_IDX
-		},
-	}
-};
-
-char builtin_entry_lv3[] = {
-	": QUADRUPLE DOUBLE DOUBLE ;\n"
-	": TEST DOUBLE ;\n"
-	": TEST2 QUADRUPLE ;\n"
+struct bultin_entry builtin_table[] = {
+	{.word = "exit",	.c_func = do_exit,		.flags = {}},
+	{.word = "create",	.c_func = do_create_word,	.flags = {}},
+	{.word = ",",		.c_func = do_comma,		.flags = {}},
+	{.word = "docol",	.c_func = do_docol,		.flags = {.f.hidden = 1}},
+	{.word = "+",		.c_func = do_plus,		.flags = {}},
+	{.word = "-",		.c_func = do_minus,		.flags = {}},
+	{.word = "/",		.c_func = do_divide,		.flags = {}},
+	{.word = "*",		.c_func = do_multiply,		.flags = {}},
+	{.word = "find",	.c_func = do_find,		.flags = {}},
+	{.word = ".s",		.c_func = do_printstack,	.flags = {}},
+	{.word = ".",		.c_func = do_dot,		.flags = {}},
+	{.word = "]",		.c_func = do_rbrac,		.flags = {}},
+	{.word = "[",		.c_func = do_lbrac,		.flags = {.f.immediate = 1}},
+	{.word = "latest_f",	.c_func = do_latest_fetch,	.flags = {}},
+	{.word = "here",	.c_func = do_here,		.flags = {}},
+	{.word = "hidden",	.c_func = do_hidden,		.flags = {}},
+	{.word = "word",	.c_func = do_word,		.flags = {}},
+	{.word = "lit",		.c_func = do_lit,		.flags = {.f.hidden = 1}},
+	{.word = "key",		.c_func = do_key,		.flags = {}},
+	{.word = "drop",	.c_func = do_drop,		.flags = {}},
+	{.word = "swap",	.c_func = do_swap,		.flags = {}},
+	{.word = "rot",		.c_func = do_rot,		.flags = {}},
+	{.word = "over",	.c_func = do_over,		.flags = {}},
+	{.word = "mod",		.c_func = do_mod,		.flags = {}},
+	{.word = "1+",		.c_func = do_incr,		.flags = {}},
+	{.word = "1-",		.c_func = do_decr,		.flags = {}},
+	{.word = "=",		.c_func = do_equal,		.flags = {}},
+	{.word = "<",		.c_func = do_less_than,		.flags = {}},
+	{.word = ">",		.c_func = do_greater_than,	.flags = {}},
+	{.word = "0=",		.c_func = do_zero_equal,	.flags = {}},
+	{.word = "@",		.c_func = do_fetch,		.flags = {}},
+	{.word = "!",		.c_func = do_store,		.flags = {}},
+	{.word = "C@",		.c_func = do_cfetch,		.flags = {}},
+	{.word = "C!",		.c_func = do_cstore,		.flags = {}},
+	{.word = ":",		.c_func = do_colon,		.flags = {}},
+	{.word = ";",		.c_func = do_semicolon,		.flags = {.f.immediate = 1}},
 };
 
 int builtins_init(struct forth_ctx *ctx)
 {
 	word_t w;
 	int len;
+	dict_header_t *w_h;
 
-	memset(ctx->c_func_list, 0, sizeof(ctx->c_func_list));
+	for (size_t i = 0; i < ARRAY_SIZE(builtin_table); i++) {
+		/* we push a string, and the length of the string on the stack */
+		len = stack_push_wordname(ctx, builtin_table[i].word, strlen(builtin_table[i].word));
+		/* create_word consumes the length and the string to create a new dictionary entry */
+		do_create_word(ctx);
+		w_h = ctx->dict.latest;
+		w_h->flags = builtin_table[i].flags;
+		w_h->flags.f.length = len;
 
-	for (size_t i = 0; i < ARRAY_SIZE(builtin_init_c_table); i++) {
-		if (builtin_init_c_table[i].word == 0) {
-			continue;
-		}
-		len = STACK_PUSH_WORDNAME(builtin_init_c_table[i].word);
-		_do_create_word(ctx);
-		CURRENT_WORD->flags = builtin_init_c_table[i].flags;
-		CURRENT_WORD->flags.length = len;
-
-		/* append the c function */
-		w.is_c_func = 1;
-		w.idx_or_ptr = vm_c_func_append(ctx, builtin_init_c_table[i].c_func);
-		dict_append(ctx, &w.number);
-		builtin_init_c_table[i].codeword = w;
-
-		if (w.idx_or_ptr < 0) {
-			TELL("WARNING: tried to load more c functions than we"
-			" have space in builtin_init_c_table\n");
-			break;
-		}
-
-		/* append EXIT codeword */
-		w = builtin_init_c_table[EXIT_IDX].codeword;
-		dict_append(ctx, &w.number);
-	}
-
-	for (size_t i = 0; i < ARRAY_SIZE(builtins_lvl2_table); i++) {
-		len = STACK_PUSH_WORDNAME(builtins_lvl2_table[i].word);
-		_do_create_word(ctx);
-		CURRENT_WORD->flags = builtins_lvl2_table[i].flags;
-		CURRENT_WORD->flags.length = len;
-
-		for (size_t j = 0; (j < FORTH_LV2_WORD_MAX_LEN)
-		     && (builtins_lvl2_table[i].c_idx_list[j] != NULL_IDX); j++) {
-			/**
-			 * convert builtin index to c_function (in this case it
-			 * will be equivalent to the codeword address of a
-			 * forth word).
-			 * NOTE: in this forth >CFA and >DFA are same.
-			 */
-			w = builtin_init_c_table[builtins_lvl2_table[i].c_idx_list[j]].codeword;
-			dict_append(ctx, &w.number);
-		}
+		/**
+		 * Builtin primitive words have a single function pointer in their
+		 * definition. Compiled forth words will contain what is called the
+		 * codeword, i.e. do_docol function pointer as the first word. See
+		 * implementation of do_colon (":" function). Additionally compiled
+		 * words will contain do_exit as the last word in their definition.
+		 */
+		w = builtin_table[i].c_func;
+		compile_word(ctx, (stack_cell_t)w);
 	}
 
 	return 0;

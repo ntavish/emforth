@@ -1,4 +1,5 @@
 .vscode
 *.o
-vm
+emforth
 .editorconfig
+.temp

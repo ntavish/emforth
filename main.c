@@ -1,14 +1,13 @@
 /**
- * @file builtins.c
- * @author Tavish Naruka (tavishnaruka@gmail.com)
- * @brief This file contains the definitions of the built-in words used by this
- * forth.
- * 
- * @copyright Copyright (c) 2024
- * 
+ * @file main.c
+ * @brief Main entry point for emForth sample application
+ *
+ * @author Tavish Naruka
  */
 #include <stdio.h>
 #include <string.h>
+#include <stdlib.h>
+
 #include "vm.h"
 
 int tell(const char *s)
@@ -19,12 +18,13 @@ int tell(const char *s)
 int main()
 {
 	struct forth_ctx ctx;
-	
+
 	memset(&ctx, 0, sizeof(ctx));
-	
+
 	/* set console functions */
-	ctx.plat.tell = tell;
-	ctx.plat.get_key = getchar;
+	ctx.plat.puts = tell;
+	ctx.plat.getchar = getchar;
+	ctx.plat.input_file = NULL;
 
 	if (vm_init(&ctx) != 0) {
 		printf("Error initializing vm\n");

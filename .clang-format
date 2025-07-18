@@ -1,0 +1,8 @@
+---
+BasedOnStyle: LLVM
+IndentCaseLabels: false
+IndentGotoLabels: false
+IndentWidth: 8
+InsertBraces: true
+InsertNewlineAtEOF: true
+---
