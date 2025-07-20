@@ -4,11 +4,11 @@
  *
  * @author Tavish Naruka
  */
+#include "emforth.h"
 #include <stdio.h>
 #include <string.h>
-#include <stdlib.h>
 
-#include "vm.h"
+struct forth_ctx ctx;
 
 int tell(const char *s)
 {
@@ -17,21 +17,23 @@ int tell(const char *s)
 
 int main()
 {
-	struct forth_ctx ctx;
-
 	memset(&ctx, 0, sizeof(ctx));
 
 	/* set console functions */
 	ctx.plat.puts = tell;
+#ifdef __EMSCRIPTEN__
+	int emforth_web_getchar();
+	ctx.plat.getchar = emforth_web_getchar;
+#else
 	ctx.plat.getchar = getchar;
-	ctx.plat.input_file = NULL;
+#endif
 
-	if (vm_init(&ctx) != 0) {
-		printf("Error initializing vm\n");
+	if (emforth_init(&ctx) != 0) {
+		ctx.plat.puts("Error initializing\n");
 		return -1;
 	}
 
-	vm_interpreter(&ctx);
+	outer_interpreter(&ctx);
 
 	return 0;
 }

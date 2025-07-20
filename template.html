@@ -1,0 +1,112 @@
+<!doctype html>
+<html>
+    <head>
+        <title>emForth Web Shell</title>
+        <style>
+            body {
+                font-family: monospace;
+                background-color: #1e1e1e;
+                color: #d4d4d4;
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                padding: 20px;
+            }
+            #output {
+                width: 80%;
+                max-width: 800px;
+                height: 400px;
+                background-color: #000;
+                color: #0f0;
+                font-family: monospace;
+                white-space: pre;
+                border: 1px solid #333;
+                overflow-y: scroll;
+                padding: 10px;
+                box-sizing: border-box;
+                resize: vertical;
+            }
+            #input {
+                width: 80%;
+                max-width: 800px;
+                background-color: #333;
+                color: #fff;
+                border: 1px solid #555;
+                padding: 5px;
+                margin-top: 10px;
+                box-sizing: border-box;
+            }
+        </style>
+    </head>
+    <body>
+        <h1>emForth Web Shell</h1>
+        <textarea id="output" readonly></textarea>
+        <input type="text" id="input" autofocus />
+        <script type="text/javascript">
+            var inputBuffer = [];
+            var encoder = new TextEncoder();
+
+            var Module = {
+                print: function (text) {
+                    if (arguments.length > 1) {
+                        text = Array.prototype.slice.call(arguments).join(" ");
+                    }
+                    var element = document.getElementById("output");
+                    if (element) {
+                        element.value += text + "\n";
+                        element.scrollTop = element.scrollHeight;
+                    }
+                },
+                printErr: function (text) {
+                    if (arguments.length > 1) {
+                        text = Array.prototype.slice.call(arguments).join(" ");
+                    }
+                    console.error(text);
+                    var element = document.getElementById("output");
+                    if (element) {
+                        element.value += "ERR: " + text + "\n";
+                        element.scrollTop = element.scrollHeight;
+                    }
+                },
+                stdin: function () {
+                    if (inputBuffer.length > 0) {
+                        return inputBuffer.shift();
+                    }
+                    return undefined;
+                },
+                onRuntimeInitialized: function () {
+                    document
+                        .getElementById("input")
+                        .addEventListener("keydown", function (event) {
+                            if (event.key === "Enter") {
+                                var line = this.value + "\n";
+                                var encoded = encoder.encode(line);
+
+                                // Echo input to console
+                                var output = document.getElementById("output");
+                                if (output) {
+                                    output.value += this.value + "\n";
+                                    output.scrollTop = output.scrollHeight;
+                                }
+
+                                // Add to input buffer
+                                for (var i = 0; i < encoded.length; i++) {
+                                    inputBuffer.push(encoded[i]);
+                                }
+
+                                this.value = "";
+                                this.focus();
+                            }
+                        });
+                },
+            };
+
+            var script = document.createElement("script");
+            script.src = "./emforth.js";
+            script.onload = function () {
+                EmforthModule(Module);
+            };
+            document.body.appendChild(script);
+        </script>
+    </body>
+</html>

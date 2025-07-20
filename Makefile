@@ -1,22 +1,44 @@
 LIBS =
 CFLAGS = -std=c99 -ggdb -O0 -Wall -Wextra -Wcast-align
 
-# SRC=$(wildcard *.c)
-SRC=main.c vm.c vm_interpreter.c builtins.c
+SRC=main.c emforth.c interpreter.c builtins.c
 HEADERS=$(wildcard *.h)
 OBJ=$(SRC:.c=.o)
-BINARY=emforth
+BUILD_DIR=build
+OBJ_FILES=$(addprefix $(BUILD_DIR)/,$(OBJ))
+BINARY=$(BUILD_DIR)/emforth
+EMSCRIPTEM_BIN=$(BUILD_DIR)/emforth.js
+EMCC_SRC=$(SRC) platform_web.c
+EMCC_FLAGS= -s USE_PTHREADS=0 \
+    -s ASYNCIFY=1 \
+    -s WASM=1 \
+    -s EXPORT_NAME="EmforthModule" \
+    -s MODULARIZE=1 \
+    -s NO_EXIT_RUNTIME=1 \
+    -s "EXTRA_EXPORTED_RUNTIME_METHODS=['ccall']" \
+    -s ALLOW_MEMORY_GROWTH=1 \
+    -s ASSERTIONS=1
 
-$(BINARY): $(OBJ)
+all: $(BINARY)
+
+web: $(EMSCRIPTEM_BIN)
+	# note, i got incorrect syntax in emforth.js, had to manuall fix a "== =" to "===", might get same again
+	cp template.html $(BUILD_DIR)/
+
+$(BUILD_DIR):
+	mkdir -p $(BUILD_DIR)
+
+$(BINARY): $(OBJ_FILES) | $(BUILD_DIR)
 	$(CC) -o $@ $^ $(CFLAGS) $(LIBS)
 
-$(OBJ): $(HEADERS)
-
-%.o : %.c
+$(BUILD_DIR)/%.o: %.c  $(HEADERS) | $(BUILD_DIR)
 	$(CC) -c $(CFLAGS) $< -o $@
 
+$(EMSCRIPTEM_BIN): $(EMCC_SRC) | $(BUILD_DIR)
+	emcc $^ -o $@ $(EMCC_FLAGS)
+
 clean:
-	rm -f *.o emforth
+	rm -rf $(BUILD_DIR)
 
 strip: $(BINARY)
 	strip --strip-unneeded $^
@@ -24,4 +46,7 @@ strip: $(BINARY)
 cloc:
 	cloc  --exclude-dir=reference,.vscode  .
 
-.PHONY: clean cloc strip
+format:
+	clang-format -i -- **.c **.h
+
+.PHONY: clean cloc strip format

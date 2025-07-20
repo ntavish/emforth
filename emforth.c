@@ -1,22 +1,21 @@
 /**
- * @file vm.c
+ * @file emforth.c
  * @author Tavish Naruka (tavishnaruka@gmail.com)
  * @brief Forth outer interpreter
  *
  * @copyright Copyright (c) 2025
  *
  */
-#include <string.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "vm.h"
-#include "vm_interpreter.h"
 #include "builtins.h"
+#include "emforth.h"
+#include "interpreter.h"
 
-int vm_init(struct forth_ctx *ctx)
+int emforth_init(struct forth_ctx *ctx)
 {
 	if (ctx == NULL || ctx->plat.puts == NULL ||
 	    ctx->plat.getchar == NULL) {
@@ -39,9 +38,9 @@ int vm_init(struct forth_ctx *ctx)
 	builtins_init(ctx);
 
 	/* Initialize interpreter */
-	vm_interpreter_init(ctx);
+	interpreter_init(ctx);
 
-	ctx->plat.puts("VM initialized\n");
+	ctx->plat.puts("emForth initialized\n");
 
 	return 0;
 }

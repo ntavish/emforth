@@ -2,7 +2,11 @@
 BasedOnStyle: LLVM
 IndentCaseLabels: false
 IndentGotoLabels: false
+UseTab: Always
+AllowShortIfStatementsOnASingleLine: false
+AllowShortFunctionsOnASingleLine: false
 IndentWidth: 8
 InsertBraces: true
 InsertNewlineAtEOF: true
+BreakBeforeBraces: Linux
 ---

@@ -1,17 +1,16 @@
 /**
- * @file vm.h
+ * @file emforth.h
  * @author Tavish Naruka (tavishnaruka@gmail.com)
  * @brief A direct threaded code forth desgined to be embeddable.
  *
  * @copyright Copyright (c) 2025
  */
 
-#ifndef __FORTH_VM_HEADER__
-#define __FORTH_VM_HEADER__
+#ifndef __FORTH_EMFORTH_HEADER__
+#define __FORTH_EMFORTH_HEADER__
 
-#include <stdint.h>
-#include <stdio.h>
 #include <stdbool.h>
+#include <stdint.h>
 
 /**
  * Dictionary:
@@ -85,7 +84,7 @@ typedef union {
 		unsigned char hidden : 1;
 		unsigned char spare : 1;
 		unsigned char length : 5;
-	}f;
+	} f;
 	unsigned char flag_fields;
 } flag_t;
 
@@ -97,17 +96,18 @@ typedef union {
  * definition through a pointer.
  */
 typedef struct dict_header_s {
-    struct dict_header_s *link;
+	struct dict_header_s *link;
 	flag_t flags;
 } dict_header_t;
 
-#define DICT_NULL		((dict_header_t *)NULL)
+#define DICT_NULL ((dict_header_t *)NULL)
 
 /*
  * Dictionary definition words are sizeof(word_t) aligned as
  * mentioned above. Use the following utility macro.
  */
-#define ALIGN_UP_WORD_T(x)	(((stack_cell_t)(x) + (sizeof(word_t) - 1)) & ~(sizeof(word_t) - 1))
+#define ALIGN_UP_WORD_T(x)                                                     \
+	(((stack_cell_t)(x) + (sizeof(word_t) - 1)) & ~(sizeof(word_t) - 1))
 
 /**
  * Stacks:
@@ -117,13 +117,12 @@ typedef struct dict_header_s {
  *
  * Stacks sizes and dictionary sizes in word_t units
  */
-#define STACK_SIZE_MAX		(1024u)
-#define RSTACK_SIZE_MAX		(1024u)
-#define DICTIONARY_MEMORY_SIZE	(8192u)
+#define STACK_SIZE_MAX (stack_cell_t)(1024u)
+#define RSTACK_SIZE_MAX (stack_cell_t)(1024u)
+#define DICTIONARY_MEMORY_SIZE (stack_cell_t)(8192u)
 typedef intptr_t stack_cell_t;
 
-typedef struct
-{
+typedef struct {
 	unsigned char mem[DICTIONARY_MEMORY_SIZE];
 
 	/* points to latest defined word header in dictionary */
@@ -136,8 +135,7 @@ typedef struct
 /* platform dependent interface that application must provide */
 struct platform_s {
 	int (*puts)(const char *); /* print string */
-	int (*getchar)(); /* get input key */
-	FILE *input_file; /* file to read from, NULL for stdin */
+	int (*getchar)();	   /* get input key */
 };
 
 /* == interpreter related things == */
@@ -147,16 +145,14 @@ enum tok_e {
 	T_NEWLINE,
 };
 
-typedef enum {
-	MODE_IMMEDIATE = 0,
-	MODE_COMPILE = 1
-} vm_mode_e;
+typedef enum { MODE_IMMEDIATE = 0, MODE_COMPILE = 1 } mode_e;
 
-#define MAX_INPUT_LEN 		(WORD_NAME_MAX_LEN)
+#define MAX_INPUT_LEN (WORD_NAME_MAX_LEN * 10)
 
-struct vm_intrp_data {
-	vm_mode_e mode; /* interpreter or compiler mode*/
-	bool in_comment; /* true when processing backslash comment until newline */
+struct interpreter_data {
+	mode_e mode;	 /* interpreter or compiler mode*/
+	bool in_comment; /* true when processing backslash comment until newline
+			  */
 };
 
 struct forth_ctx {
@@ -165,15 +161,15 @@ struct forth_ctx {
 
 	/* stacks */
 	stack_cell_t stack[STACK_SIZE_MAX];
-	word_t* rstack[RSTACK_SIZE_MAX];
-	unsigned int sp; /* stack pointer - current insert position */
-	unsigned int rsp; /* return stack pointer - current insert position*/
+	word_t *rstack[RSTACK_SIZE_MAX];
+	stack_cell_t sp;  /* stack pointer - current insert position */
+	stack_cell_t rsp; /* return stack pointer - current insert position*/
 
 	word_t *ip; /* this is pointing to a word_t in the definition */
 	word_t *w;  /* current word being executed */
 
 	/* interpreter data */
-	struct vm_intrp_data intrp_data;
+	struct interpreter_data intrp_data;
 
 	/* platform specific data */
 	struct platform_s plat;
@@ -184,15 +180,15 @@ struct forth_ctx {
  * @param ctx valid pointer to struct forth_ctx.
  * @returns 0 on success
  */
-int vm_init(struct forth_ctx *ctx);
+int emforth_init(struct forth_ctx *ctx);
 
 /**
  * @brief The interpreter loop
  *
- * @param ctx that has been initialized with vm_init
+ * @param ctx that has been initialized with emforth_init
  * @return int
  * Does not return until error or encountering EOF.
  */
-int vm_interpreter(struct forth_ctx *ctx);
+int outer_interpreter(struct forth_ctx *ctx);
 
-#endif /* __FORTH_VM_HEADER__ */
+#endif /* __FORTH_EMFORTH_HEADER__ */
