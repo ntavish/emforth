@@ -41,8 +41,13 @@
     <body>
         <h1>emForth Web Shell</h1>
         <textarea id="output" readonly></textarea>
-        <input type="text" id="input" autofocus />
+        <input type="text" id="input" />
+
         <script type="text/javascript">
+            // Clicking anywhere in the output area puts the cursor in the input box.
+            document.getElementById("output").addEventListener("click", function () {
+                document.getElementById("input").focus();
+            });
             var inputBuffer = [];
             var encoder = new TextEncoder();
 
